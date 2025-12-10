@@ -1,32 +1,54 @@
-# deform_registration_correct.py
+# deform_registration.py has solve pa_5
 import numpy as np
 import os
 from utility_functions import *
 from ICP_algo import *
 from ICP_iteration import *
 
+'''
+Created December 5, 2025
+Author: Maya Sharma
+params: point, triangle_vertices
+Returns: u, v, w
+Summary: computes barycentric coordinates of a point with respect to a triangle
+Note: this function also handles triangles that have an area close to zero, by returning barycentric coordinatess 
+        that are equal. Like (1/3, 1/3, 1/3) for example.
+'''
 def compute_barycentric(point, triangle_vertices):
+    # triangle verticies is a 3 by 3 array
     A, B, C = triangle_vertices
     v0 = B - A
     v1 = C - A
     v2 = point - A
     
+    # calculate  dot products of the vectors formed above in this section
     d00 = np.dot(v0, v0)
     d01 = np.dot(v0, v1)
     d11 = np.dot(v1, v1)
     d20 = np.dot(v2, v0)
     d21 = np.dot(v2, v1)
     
+    # get the barcyentric coordinates
     denom = d00 * d11 - d01 * d01
     if abs(denom) < 1e-12:
         return 1/3, 1/3, 1/3
     
+    #calculate v and w which are the barycentric coordinates
     v = (d11 * d20 - d01 * d21) / denom
     w = (d00 * d21 - d01 * d20) / denom
     u = 1 - v - w
     
     return u, v, w
 
+'''
+Created December 5, 2025
+Author: Maya Sharma
+params: filename and, max_modes
+Returns: mean_vertices, mode_vectors
+Summary: reads modes file and returns mean vertices and mode vectors up to max_modes
+Notes: this function makes sure that there's no index error if the max_modes is more than available modes. Also,
+            it handles both values separated by a space or by a comma.
+'''
 def read_modes_fixed(filename, max_modes):
     with open(filename, 'r') as f:
         lines = [line.strip() for line in f.readlines()]
@@ -35,10 +57,12 @@ def read_modes_fixed(filename, max_modes):
     n_vertices_match = re.search(r'Nvertices=(\d+)', lines[0])
     n_modes_match = re.search(r'Nmodes=(\d+)', lines[0])
     
+    # perform a asafety check here to make sure not have to deal with any index errors
     n_vertices = int(n_vertices_match.group(1))
     n_modes_total = int(n_modes_match.group(1))
     n_modes = min(max_modes, n_modes_total)
     
+    # read the mean vertices and mode vectors
     mean_vertices = []
     modes = [[] for _ in range(n_modes)]
     
@@ -55,6 +79,7 @@ def read_modes_fixed(filename, max_modes):
         mean_vertices.append(coords)
         line_idx += 1
     
+    # read each mode
     for m in range(n_modes):
         if line_idx < len(lines) and f"Mode {m+1}" in lines[line_idx]:
             line_idx += 1
@@ -70,11 +95,22 @@ def read_modes_fixed(filename, max_modes):
     
     return np.array(mean_vertices), [np.array(mode) for mode in modes]
 
-def solve_pa5_correct(bodyA_file, bodyB_file, mesh_file, modes_file, 
+'''
+Created December 5, 2025
+Author: Maya Sharma
+params: bodyA_file bodyB_file mesh_file modes_file sample_readings_file output_file max_iters
+Returns: s_k_final, c_k_final and, lambdas
+Summary: this function performs deformable registration as per PA5 requirements 
+Notes: it uses helper functions from utility functions pythin file and the ICP code as well. Also,
+         it limits the number of modes used based on the sample readings file.
+
+'''
+
+def solve_pa5(bodyA_file, bodyB_file, mesh_file, modes_file, 
                       sample_readings_file, output_file, max_iters=50):
     
     
-    
+    # read input files ihere
     vertices, triangles, _ = read_mesh(mesh_file)
     A_markers, A_tip = read_body(bodyA_file)
     B_markers, B_tip = read_body(bodyB_file)
@@ -84,13 +120,14 @@ def solve_pa5_correct(bodyA_file, bodyB_file, mesh_file, modes_file,
     N_A = len(A_markers)
     N_B = len(B_markers)
     
-    
+    # read the modes files
     mean_vertices, mode_vectors = read_modes_fixed(modes_file, N_modes)
     
     
     d_k_points = []
     
     for k in range(Nsamps):
+        # extract kth frame
         frame = frames[k]
         a_markers_tracker = frame[:N_A]
         b_markers_tracker = frame[N_A:N_A+N_B]
@@ -111,7 +148,7 @@ def solve_pa5_correct(bodyA_file, bodyB_file, mesh_file, modes_file,
     t_reg = np.zeros(3)
     lambdas = np.zeros(N_modes)
     
-    
+    # optimization done iteratively here
     for iteration in range(max_iters):
         
        
@@ -129,6 +166,7 @@ def solve_pa5_correct(bodyA_file, bodyB_file, mesh_file, modes_file,
         triangle_indices = []
         
         for d_prime_k in d_prime_k_points:
+            # find the closest pint on the mesh that is deformed
             m_k_on_deformed, _, tri_idx = closest_point_on_mesh(d_prime_k, deformed_vertices, triangles)
             
             v0_idx, v1_idx, v2_idx = triangles[tri_idx]
@@ -143,6 +181,7 @@ def solve_pa5_correct(bodyA_file, bodyB_file, mesh_file, modes_file,
         A = np.zeros((3 * Nsamps, N_modes))
         b = np.zeros(3 * Nsamps) 
         
+        # set up the linear system A times lamda is b
         for k in range(Nsamps):
             d_prime_k = d_prime_k_points[k]
             tri_idx = triangle_indices[k]
@@ -158,14 +197,17 @@ def solve_pa5_correct(bodyA_file, bodyB_file, mesh_file, modes_file,
                 mv0, mv1, mv2 = mode_vectors[m][[v0_idx, v1_idx, v2_idx]]
                 a_mk = zeta * mv0 + xi * mv1 + psi * mv2 # q_m,k
                 A[3*k:3*k+3, m] = a_mk
-                
+        
+        # solve for the new lamdaas here      
         lambda_new, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
         lambdas = lambda_new
         
+        # update the registration 
         deformed_vertices_new = mean_vertices.copy()
         for m in range(N_modes):
             deformed_vertices_new += lambdas[m] * mode_vectors[m]
-            
+        
+           # find mk for Freg
         m_k_for_Freg = [] 
         for d_prime_k in d_prime_k_points:
             closest_pt_final, _, _ = closest_point_on_mesh(d_prime_k, deformed_vertices_new, triangles)
@@ -175,6 +217,7 @@ def solve_pa5_correct(bodyA_file, bodyB_file, mesh_file, modes_file,
        
         R_new, t_new = register_points(d_k_points, m_k_for_Freg)
         
+        # find the mean error after this iteration
         s_k_new_final = apply_transform(R_new, t_new, d_k_points)
         c_k_new_final = apply_transform(R_new, t_new, m_k_for_Freg)
         
@@ -183,19 +226,19 @@ def solve_pa5_correct(bodyA_file, bodyB_file, mesh_file, modes_file,
         R_reg = R_new
         t_reg = t_new
         
-        print(f"Iter {iteration+1}: error = {mean_error:.6f}, lambdas = {[f'{l:.2f}' for l in lambdas]}")
         
         if mean_error < 0.001:
-            print(f"Converged at iteration {iteration+1}")
             break
     
 
+# get the final calcualtion for output 
     final_deformed = mean_vertices.copy()
     for m in range(N_modes):
         final_deformed += lambdas[m] * mode_vectors[m]
     
     s_k_final = apply_transform(R_reg, t_reg, d_k_points)
     
+    # find mk fro the final output
     R_reg_inv_final, t_reg_inv_final = apply_inverse_transform(R_reg, t_reg)
     s_k_final_B = apply_transform(R_reg_inv_final, t_reg_inv_final, s_k_final)
     
